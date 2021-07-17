@@ -1,3 +1,7 @@
+import threading
+import time
+from unittest.mock import Mock
+
 from django.test import RequestFactory, override_settings
 from django.urls import resolve, reverse
 
@@ -130,3 +134,29 @@ class HistoryViewsTestCase(IntegrationTestCase):
         self.assertEqual(len(data["requests"]), 1)
         for val in ["foo", "bar"]:
             self.assertIn(val, data["requests"][0]["content"])
+
+    def test_parallel_history_refresh(self):
+        def _update_store(store, value):
+            store.store_id = None
+            time.sleep(0.002)
+            store.store()
+
+        threads = []
+        dict_mutated = False
+
+        for i in range(10):
+            thread = threading.Thread(target=_update_store, args=[DebugToolbar(Mock(), Mock()), i])
+            threads.append(thread)
+            thread.start()
+            if i % 5 == 0:
+                data = {"signed": SignedDataForm.sign({"store_id": i})}
+                try:
+                    self.client.get(reverse("djdt:history_refresh"), data=data)
+                except RuntimeError as exc:
+                    dict_mutated = True
+                    assert "OrderedDict mutated during iteration" in str(exc)
+
+        for thread in threads:
+            thread.join()
+
+        assert dict_mutated
